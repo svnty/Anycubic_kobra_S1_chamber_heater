@@ -58,7 +58,7 @@ void loop() {
 
   sensors.requestTemperatures(); 
   currentTemperature = sensors.getTempCByIndex(0);
-  if (currentTemperature != DEVICE_DISCONNECTED_C || true) {
+  if (currentTemperature != DEVICE_DISCONNECTED_C) {
     if (targetTemperature < 40) {
       digitalWrite(RELAY_OUTPUT, LOW);
     } else {
