@@ -55,6 +55,8 @@ void setup() {
 void loop() {
   Serial.print("Target Temperature: ");
   Serial.println(targetTemperature);
+  Serial.print("Current Temperature:");
+  Serial.println(currentTemperature);
 
   sensors.requestTemperatures(); 
   currentTemperature = sensors.getTempCByIndex(0);
@@ -72,40 +74,55 @@ void loop() {
 
   WiFiClient client = httpEndPoint.available();
   if (client) {
-    String requestLine = "";
-    while (client.connected() && client.available()) {
-      char c = client.read();
-      requestLine += c;
-      if (c == '\n') break; 
-    }
+    String fullRequest = "";
+    unsigned long timeout = millis();
     
-    if (requestLine.indexOf("POST") != -1) {
-      int index = requestLine.indexOf("target=");
-      if (index != -1) {
-        int spaceIndex = requestLine.indexOf(" ", index);
-        String targetStr = requestLine.substring(index + 7, spaceIndex);
-        targetTemperature = targetStr.toFloat();
-        Serial.print("Updated Target Temp to: ");
-        Serial.println(targetTemperature);
+    // Read EVERYTHING (Headers + Body Payload) into one string
+    while (client.connected() && millis() - timeout < 500) {
+      while (client.available()) {
+        char c = client.read();
+        fullRequest += c;
+        timeout = millis(); // Reset timeout while data is streaming in
       }
     }
+    
+    // Scan the complete request for the target variable
+    int index = fullRequest.indexOf("target=");
+    if (index != -1) {
+      int endIndex = fullRequest.length();
+      int spaceIndex = fullRequest.indexOf(" ", index);
+      int ampIndex = fullRequest.indexOf("&", index);
+      int newlineIndex = fullRequest.indexOf("\r", index);
+      
+      if (spaceIndex != -1 && spaceIndex < endIndex) endIndex = spaceIndex;
+      if (ampIndex != -1 && ampIndex < endIndex) endIndex = ampIndex;
+      if (newlineIndex != -1 && newlineIndex < endIndex) endIndex = newlineIndex;
+      
+      String targetStr = fullRequest.substring(index + 7, endIndex);
+      targetStr.trim();
+      targetTemperature = targetStr.toFloat();
+    }
 
+    // Send the response
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/plain");
     client.println("Connection: close");
     client.println();
-    client.print("Current Temp: "); 
-    client.print(currentTemperature); 
+    client.print("Current Temp: ");
+    client.print(currentTemperature);
     client.println(" C");
-    client.print("Target Temp: "); 
-    client.print(targetTemperature); 
+    client.print("Target Temp: ");
+    client.print(targetTemperature);
     client.println(" C");
-    client.print("Previous Relay Status: "); 
-    client.println(digitalRead(RELAY_OUTPUT) ? "OPEN" : "CLOSED");
-    client.print("Next Relay State:");
-    client.println(targetTemperature >= 40 ? "OPEN" : "CLOSED");
-
-    client.stop(); 
+    client.print("Relay: ");
+    if (targetTemperature < 40) {
+      client.println("OFF");
+    } else {
+      client.println("ON");
+    }
+    
+    delay(10); 
+    client.stop();
   }
   
   delay(200);
