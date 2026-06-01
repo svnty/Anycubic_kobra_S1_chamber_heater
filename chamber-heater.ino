@@ -31,9 +31,9 @@ void setup() {
   FastLED.clear();
 
   // WiFi
-  WiFi.setHostname("chamber-heater");
+  WiFi.setHostname("test-esp");
   WiFiManager wifiManager;
-  bool success = wifiManager.autoConnect("chamber-heater");
+  bool success = wifiManager.autoConnect("test-esp");
   if (!success) {
     leds[0] = CRGB::Red;
     FastLED.show();
@@ -60,15 +60,13 @@ void loop() {
 
   sensors.requestTemperatures(); 
   currentTemperature = sensors.getTempCByIndex(0);
-  if (currentTemperature != DEVICE_DISCONNECTED_C) {
-    if (targetTemperature < 40) {
-      digitalWrite(RELAY_OUTPUT, LOW);
-    } else {
-      if (currentTemperature < (targetTemperature - 2.5)) {
-        digitalWrite(RELAY_OUTPUT, HIGH); 
-      } else if (currentTemperature > (targetTemperature + 2.5)) {
-        digitalWrite(RELAY_OUTPUT, LOW);  
-      }
+  if (targetTemperature < 40) {
+    digitalWrite(RELAY_OUTPUT, LOW);
+  } else {
+    if (currentTemperature < (targetTemperature - 2.5)) {
+      digitalWrite(RELAY_OUTPUT, HIGH); 
+    } else if (currentTemperature > (targetTemperature + 2.5)) {
+      digitalWrite(RELAY_OUTPUT, LOW);  
     }
   }
 
