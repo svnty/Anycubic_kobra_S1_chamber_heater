@@ -1,4 +1,3 @@
-cat << 'EOF' > /useremain/home/rinkhals/apps/99-chamber-controller/app.sh
 #!/bin/sh
 PIDFILE="/tmp/chamber_spy.pid"
 RUNTIME_CACHE="/tmp/chamber_heater_ip"
@@ -132,6 +131,3 @@ case "$1" in
         exit 1
         ;;
 esac
-EOF
-
-chmod +x /useremain/home/rinkhals/apps/99-chamber-controller/app.sh
