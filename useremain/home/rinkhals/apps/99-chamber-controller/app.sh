@@ -29,6 +29,7 @@ get_valid_ip() {
 
 run_monitor_loop() {
     LAST_FILE=""
+    LAST_TARGET_SENT="-1"
     echo "[DEBUG_MAIN] Loop engine started. Polling interval: 5s" >> "$DEBUG_LOG"
     
     while true; do
@@ -47,13 +48,16 @@ run_monitor_loop() {
         case "$STATE" in
             *"printing"*)
                 if [ -n "$CURRENT_FILE" ]; then
-                    if [ "$CURRENT_FILE" != "$LAST_FILE" ]; then
-                        LAST_FILE="$CURRENT_FILE"
-                        FULL_PATH="$GCODES_BASE/$CURRENT_FILE"
-                        echo "[DEBUG_PATH] Match found. Target file: [$FULL_PATH]" >> "$DEBUG_LOG"
+                    FULL_PATH="$GCODES_BASE/$CURRENT_FILE"
 
-                        if [ -f "$FULL_PATH" ]; then
-                            RAW_TARGET=$(grep "M141" "$FULL_PATH" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
+                    if [ -f "$FULL_PATH" ]; then
+                        RAW_TARGET=$(grep "M141" "$FULL_PATH" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
+                        [ -z "$RAW_TARGET" ] && RAW_TARGET="0"
+
+                        # FIX: Fire if it's a brand new file OR if the target state has drifted
+                        if [ "$CURRENT_FILE" != "$LAST_FILE" ] || [ "$RAW_TARGET" != "$LAST_TARGET_SENT" ]; then
+                            LAST_FILE="$CURRENT_FILE"
+                            echo "[DEBUG_PATH] Match found. Target file: [$FULL_PATH]" >> "$DEBUG_LOG"
                             echo "[DEBUG_GREP] Parsed target: [$RAW_TARGET]" >> "$DEBUG_LOG"
 
                             if [ -n "$RAW_TARGET" ]; then
@@ -64,14 +68,16 @@ run_monitor_loop() {
                                         echo "[DEBUG_CURL] Sending 0C safety shutdown target..." >> "$DEBUG_LOG"
                                         curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
                                         echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
+                                        LAST_TARGET_SENT="$RAW_TARGET"
                                     else
                                         echo "[DEBUG_CURL] Synchronously firing target payload to http://$ACTIVE_IP" >> "$DEBUG_LOG"
                                         curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1
                                         echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
+                                        LAST_TARGET_SENT="$RAW_TARGET"
                                     fi
                                 else
                                     echo "[DEBUG_ERR] Dynamic IP lookup returned empty." >> "$DEBUG_LOG"
-                                fi
+                               fi
                             fi
                         fi
                     fi
@@ -81,6 +87,7 @@ run_monitor_loop() {
                 if [ -n "$LAST_FILE" ]; then
                     echo "[DEBUG_SHUTDOWN] Print ended. Disabling heater relays." >> "$DEBUG_LOG"
                     LAST_FILE=""  
+                    LAST_TARGET_SENT="-1"
                     ACTIVE_IP=$(get_valid_ip)
                     if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
                         curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
@@ -127,4 +134,3 @@ case "$1" in
         exit 1
         ;;
 esac
-EOF
