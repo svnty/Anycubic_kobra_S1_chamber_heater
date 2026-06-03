@@ -1,22 +1,21 @@
 #!/bin/sh
-PIDFILE=/tmp/chamber_spy.pid
-LOG_FILE="/tmp/gklib.log"
+PIDFILE="/tmp/chamber_spy.pid"
 RUNTIME_CACHE="/tmp/chamber_heater_ip"
 MDNS_SCRIPT="/userdata/chamber/mdns_resolve.py"
+GCODES_BASE="/userdata/app/gk/printer_data/gcodes"
+DEBUG_LOG="/tmp/chamber_debug.log"
+
+echo "=== CHAMBER CONTROLLER DAEMON LOG INITIALIZED ===" > "$DEBUG_LOG"
 
 get_valid_ip() {
-    # 1. Try reading the current mDNS runtime cache file
     if [ -f "$RUNTIME_CACHE" ]; then
         CURRENT_IP=$(cat "$RUNTIME_CACHE" | tr -d '\r\n ')
-        # Verify if this IP is actually alive on the network right now
         if [ -n "$CURRENT_IP" ] && ping -c 1 -W 1 "$CURRENT_IP" >/dev/null 2>&1; then
             echo "$CURRENT_IP"
             return 0
         fi
     fi
 
-    # 2. Cache is stale or missing! Force an emergency background re-resolve 
-    # to wake up the 15-chamber-mdns layer if python3 is available
     if [ -f "$MDNS_SCRIPT" ]; then
         python3 "$MDNS_SCRIPT" >/dev/null 2>&1
         if [ -f "$RUNTIME_CACHE" ]; then
@@ -28,28 +27,69 @@ get_valid_ip() {
     echo ""
 }
 
-run_spy_loop() {
-    while [ ! -f "$LOG_FILE" ]; do sleep 2; done
+run_monitor_loop() {
+    LAST_FILE=""
+    echo "[DEBUG_MAIN] Loop engine started. Polling interval: 5s" >> "$DEBUG_LOG"
+    
+    while true; do
+        STATS_BLOB=$(curl -s "http://localhost:7125/printer/objects/query?print_stats")
+        
+        STATE=$(echo "$STATS_BLOB" | grep -o '"state": "[^"]*"' | head -n 1 | sed 's/.*"state": "\([^"]*\)".*/\1/')
+        CURRENT_FILE=$(echo "$STATS_BLOB" | grep -o '"filename": "[^"]*"' | head -n 1 | sed 's/.*"filename": "\([^"]*\)".*/\1/')
 
-    tail -n 0 -F "$LOG_FILE" | while read -r line; do
-        case "$line" in
-            *"web hook do script: M141 S"*)
-                RAW_TARGET=$(echo "$line" | sed -n 's/.*M141 S\([0-9]*\).*/\1/p' | tr -d '\r\n ')
-                
-                if [ -n "$RAW_TARGET" ]; then
-                    # Dynamically fetch an IP that passes validation
-                    ACTIVE_IP=$(get_valid_ip)
+        case "$RAW_STATE" in
+            *)
+                # Recalculate variables safely without matching blocks breaking
+                STATE_CLEAN=$(echo "$STATE" | tr -d '\r\n ')
+                ;;
+        esac
 
-                    if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
-                        if [ "$RAW_TARGET" -lt 40 ]; then
-                            (curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1) &
-                        else
-                            (curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1) &
+        case "$STATE" in
+            *"printing"*)
+                if [ -n "$CURRENT_FILE" ]; then
+                    if [ "$CURRENT_FILE" != "$LAST_FILE" ]; then
+                        LAST_FILE="$CURRENT_FILE"
+                        FULL_PATH="$GCODES_BASE/$CURRENT_FILE"
+                        echo "[DEBUG_PATH] Match found. Target file: [$FULL_PATH]" >> "$DEBUG_LOG"
+
+                        if [ -f "$FULL_PATH" ]; then
+                            RAW_TARGET=$(grep "M141" "$FULL_PATH" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
+                            echo "[DEBUG_GREP] Parsed target: [$RAW_TARGET]" >> "$DEBUG_LOG"
+
+                            if [ -n "$RAW_TARGET" ]; then
+                                ACTIVE_IP=$(get_valid_ip)
+                                
+                                if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
+                                    if [ "$RAW_TARGET" -lt 40 ]; then
+                                        echo "[DEBUG_CURL] Sending 0C safety shutdown target..." >> "$DEBUG_LOG"
+                                        curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
+                                        echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
+                                    else
+                                        echo "[DEBUG_CURL] Synchronously firing target payload to http://$ACTIVE_IP" >> "$DEBUG_LOG"
+                                        curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1
+                                        echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
+                                    fi
+                                else
+                                    echo "[DEBUG_ERR] Dynamic IP lookup returned empty." >> "$DEBUG_LOG"
+                                fi
+                            fi
                         fi
                     fi
                 fi
                 ;;
+            *"standby"*|*"cancelled"*|*"complete"*)
+                if [ -n "$LAST_FILE" ]; then
+                    echo "[DEBUG_SHUTDOWN] Print ended. Disabling heater relays." >> "$DEBUG_LOG"
+                    LAST_FILE=""  
+                    ACTIVE_IP=$(get_valid_ip)
+                    if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
+                        curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
+                    fi
+                fi
+                ;;
         esac
+        
+        sleep 5
     done
 }
 
@@ -58,7 +98,7 @@ case "$1" in
         if [ -f $PIDFILE ] && kill -0 $(cat $PIDFILE) 2>/dev/null; then
             echo "Already running"
         else
-            run_spy_loop > /dev/null 2>&1 &
+            run_monitor_loop > /dev/null 2>&1 &
             echo $! > $PIDFILE
             echo "Started"
         fi
@@ -87,3 +127,4 @@ case "$1" in
         exit 1
         ;;
 esac
+EOF
