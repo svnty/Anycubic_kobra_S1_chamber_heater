@@ -1,3 +1,4 @@
+cat << 'EOF' > /useremain/home/rinkhals/apps/99-chamber-controller/app.sh
 #!/bin/sh
 PIDFILE="/tmp/chamber_spy.pid"
 RUNTIME_CACHE="/tmp/chamber_heater_ip"
@@ -35,15 +36,11 @@ run_monitor_loop() {
     while true; do
         STATS_BLOB=$(curl -s "http://localhost:7125/printer/objects/query?print_stats")
         
-        STATE=$(echo "$STATS_BLOB" | grep -o '"state": "[^"]*"' | head -n 1 | sed 's/.*"state": "\([^"]*\)".*/\1/')
-        CURRENT_FILE=$(echo "$STATS_BLOB" | grep -o '"filename": "[^"]*"' | head -n 1 | sed 's/.*"filename": "\([^"]*\)".*/\1/')
+        # Let Python decode the json fields and handle strings flawlessly
+        STATE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['state'])" 2>/dev/null)
+        CURRENT_FILE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['filename'])" 2>/dev/null)
 
-        case "$RAW_STATE" in
-            *)
-                # Recalculate variables safely without matching blocks breaking
-                STATE_CLEAN=$(echo "$STATE" | tr -d '\r\n ')
-                ;;
-        esac
+        echo "[DEBUG_LOOP] Polled State: [$STATE] | File: [$CURRENT_FILE] | Last Target: [$LAST_TARGET_SENT]" >> "$DEBUG_LOG"
 
         case "$STATE" in
             *"printing"*)
@@ -54,7 +51,6 @@ run_monitor_loop() {
                         RAW_TARGET=$(head -n 500 "$FULL_PATH" | grep "M141" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
                         [ -z "$RAW_TARGET" ] && RAW_TARGET="0"
 
-                        # FIX: Fire if it's a brand new file OR if the target state has drifted
                         if [ "$CURRENT_FILE" != "$LAST_FILE" ] || [ "$RAW_TARGET" != "$LAST_TARGET_SENT" ]; then
                             LAST_FILE="$CURRENT_FILE"
                             echo "[DEBUG_PATH] Match found. Target file: [$FULL_PATH]" >> "$DEBUG_LOG"
@@ -80,6 +76,8 @@ run_monitor_loop() {
                                fi
                             fi
                         fi
+                    else
+                        echo "[DEBUG_ERR] File not found on disk: [$FULL_PATH]" >> "$DEBUG_LOG"
                     fi
                 fi
                 ;;
@@ -134,3 +132,6 @@ case "$1" in
         exit 1
         ;;
 esac
+EOF
+
+chmod +x /useremain/home/rinkhals/apps/99-chamber-controller/app.sh
