@@ -51,7 +51,7 @@ run_monitor_loop() {
                     FULL_PATH="$GCODES_BASE/$CURRENT_FILE"
 
                     if [ -f "$FULL_PATH" ]; then
-                        RAW_TARGET=$(grep "M141" "$FULL_PATH" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
+                        RAW_TARGET=$(head -n 500 "$FULL_PATH" | grep "M141" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
                         [ -z "$RAW_TARGET" ] && RAW_TARGET="0"
 
                         # FIX: Fire if it's a brand new file OR if the target state has drifted
