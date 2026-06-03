@@ -2,28 +2,49 @@
 PIDFILE=/tmp/chamber_spy.pid
 LOG_FILE="/tmp/gklib.log"
 RUNTIME_CACHE="/tmp/chamber_heater_ip"
+MDNS_SCRIPT="/userdata/chamber/mdns_resolve.py"
+
+get_valid_ip() {
+    # 1. Try reading the current mDNS runtime cache file
+    if [ -f "$RUNTIME_CACHE" ]; then
+        CURRENT_IP=$(cat "$RUNTIME_CACHE" | tr -d '\r\n ')
+        # Verify if this IP is actually alive on the network right now
+        if [ -n "$CURRENT_IP" ] && ping -c 1 -W 1 "$CURRENT_IP" >/dev/null 2>&1; then
+            echo "$CURRENT_IP"
+            return 0
+        fi
+    fi
+
+    # 2. Cache is stale or missing! Force an emergency background re-resolve 
+    # to wake up the 15-chamber-mdns layer if python3 is available
+    if [ -f "$MDNS_SCRIPT" ]; then
+        python3 "$MDNS_SCRIPT" >/dev/null 2>&1
+        if [ -f "$RUNTIME_CACHE" ]; then
+            NEW_IP=$(cat "$RUNTIME_CACHE" | tr -d '\r\n ')
+            echo "$NEW_IP"
+            return 0
+        fi
+    fi
+    echo ""
+}
 
 run_spy_loop() {
-    while [ ! -f "$LOG_FILE" ]; do sleep 1; done
-    
+    while [ ! -f "$LOG_FILE" ]; do sleep 2; done
+
     tail -n 0 -F "$LOG_FILE" | while read -r line; do
         case "$line" in
             *"web hook do script: M141 S"*)
-                # Extract the digits that immediately follow 'M141 S'
                 RAW_TARGET=$(echo "$line" | sed -n 's/.*M141 S\([0-9]*\).*/\1/p' | tr -d '\r\n ')
                 
                 if [ -n "$RAW_TARGET" ]; then
-                    if [ -f "$RUNTIME_CACHE" ]; then
-                        ESP32_IP=$(cat "$RUNTIME_CACHE" | tr -d '\r\n ')
-                    else
-                        ESP32_IP=""
-                    fi
+                    # Dynamically fetch an IP that passes validation
+                    ACTIVE_IP=$(get_valid_ip)
 
-                    if [ -n "$ESP32_IP" ]; then
+                    if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
                         if [ "$RAW_TARGET" -lt 40 ]; then
-                            curl -s --max-time 3 "http://$ESP32_IP/?target=0" > /dev/null &
+                            (curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1) &
                         else
-                            curl -s --max-time 3 "http://$ESP32_IP/?target=$RAW_TARGET" > /dev/null &
+                            (curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1) &
                         fi
                     fi
                 fi
@@ -66,4 +87,3 @@ case "$1" in
         exit 1
         ;;
 esac
-root@kobra-ks1-ea93:/root# 
