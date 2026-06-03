@@ -1,0 +1,5 @@
+{
+    "$version": "1",
+    "name": "Chamber mDNS Resolver",
+    "description": "Resolves chamber-heater.local and caches the IP for the chamber heater"
+}
