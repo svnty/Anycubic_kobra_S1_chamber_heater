@@ -1,6 +1,6 @@
 #!/bin/sh
 PIDFILE=/tmp/chamber_mdns.pid
-SCRIPT=/userdata/chamber/mdns_resolve.py
+SCRIPT=/useremain/home/rinkhals/apps/15-chamber-mdns/mdns_resolve.py
 PERSISTENT_CACHE=/userdata/chamber_heater_ip
 RUNTIME_CACHE=/tmp/chamber_heater_ip
 

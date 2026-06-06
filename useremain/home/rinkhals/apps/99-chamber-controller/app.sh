@@ -1,7 +1,7 @@
 #!/bin/sh
 PIDFILE="/tmp/chamber_spy.pid"
 RUNTIME_CACHE="/tmp/chamber_heater_ip"
-MDNS_SCRIPT="/userdata/chamber/mdns_resolve.py"
+MDNS_SCRIPT="/useremain/home/rinkhals/apps/15-chamber-mdns/mdns_resolve.py"
 GCODES_BASE="/userdata/app/gk/printer_data/gcodes"
 DEBUG_LOG="/tmp/chamber_debug.log"
 
@@ -29,17 +29,13 @@ get_valid_ip() {
 
 run_monitor_loop() {
     LAST_FILE=""
-    LAST_TARGET_SENT="-1"
     echo "[DEBUG_MAIN] Loop engine started. Polling interval: 5s" >> "$DEBUG_LOG"
     
     while true; do
         STATS_BLOB=$(curl -s "http://localhost:7125/printer/objects/query?print_stats")
         
-        # Let Python decode the json fields and handle strings flawlessly
         STATE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['state'])" 2>/dev/null)
         CURRENT_FILE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['filename'])" 2>/dev/null)
-
-        echo "[DEBUG_LOOP] Polled State: [$STATE] | File: [$CURRENT_FILE] | Last Target: [$LAST_TARGET_SENT]" >> "$DEBUG_LOG"
 
         case "$STATE" in
             *"printing"*)
@@ -50,30 +46,29 @@ run_monitor_loop() {
                         RAW_TARGET=$(head -n 500 "$FULL_PATH" | grep "M141" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
                         [ -z "$RAW_TARGET" ] && RAW_TARGET="0"
 
-                        if [ "$CURRENT_FILE" != "$LAST_FILE" ] || [ "$RAW_TARGET" != "$LAST_TARGET_SENT" ]; then
-                            LAST_FILE="$CURRENT_FILE"
-                            echo "[DEBUG_PATH] Match found. Target file: [$FULL_PATH]" >> "$DEBUG_LOG"
-                            echo "[DEBUG_GREP] Parsed target: [$RAW_TARGET]" >> "$DEBUG_LOG"
+                        ACTIVE_IP=$(get_valid_ip)
+                        
+                        if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
+                            # Query the ESP32 directly to see what its current hardware target is set to
+                            ESP32_STATUS=$(curl -s --connect-timeout 2 --max-time 3 "http://$ACTIVE_IP/")
+                            LIVE_HARDWARE_TARGET=$(echo "$ESP32_STATUS" | grep "Target Temp:" | awk '{print $3}' | cut -d'.' -f1 | tr -d '\r\n ')
 
-                            if [ -n "$RAW_TARGET" ]; then
-                                ACTIVE_IP=$(get_valid_ip)
-                                
-                                if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
-                                    if [ "$RAW_TARGET" -lt 40 ]; then
-                                        echo "[DEBUG_CURL] Sending 0C safety shutdown target..." >> "$DEBUG_LOG"
-                                        curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
-                                        echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
-                                        LAST_TARGET_SENT="$RAW_TARGET"
-                                    else
-                                        echo "[DEBUG_CURL] Synchronously firing target payload to http://$ACTIVE_IP" >> "$DEBUG_LOG"
-                                        curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1
-                                        echo "[DEBUG_CURL_RESULT] Exit status: [$?]" >> "$DEBUG_LOG"
-                                        LAST_TARGET_SENT="$RAW_TARGET"
-                                    fi
+                            echo "[DEBUG_LOOP] Polled State: [$STATE] | Required: [$RAW_TARGET] | ESP32 Target: [$LIVE_HARDWARE_TARGET]" >> "$DEBUG_LOG"
+
+                            # If the ESP32 reset to 0, or doesn't match the G-code requirement, fire the payload
+                            if [ "$RAW_TARGET" != "$LIVE_HARDWARE_TARGET" ]; then
+                                LAST_FILE="$CURRENT_FILE"
+                                echo "[DEBUG_PATH] Mismatch detected! Correcting hardware target to [$RAW_TARGET]" >> "$DEBUG_LOG"
+
+                                if [ "$RAW_TARGET" -lt 40 ]; then
+                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
                                 else
-                                    echo "[DEBUG_ERR] Dynamic IP lookup returned empty." >> "$DEBUG_LOG"
-                               fi
+                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1
+                                    echo "[DEBUG_CURL_RESULT] Correction status: [$?]" >> "$DEBUG_LOG"
+                                fi
                             fi
+                        else
+                            echo "[DEBUG_ERR] Dynamic IP lookup returned empty." >> "$DEBUG_LOG"
                         fi
                     else
                         echo "[DEBUG_ERR] File not found on disk: [$FULL_PATH]" >> "$DEBUG_LOG"
@@ -84,7 +79,6 @@ run_monitor_loop() {
                 if [ -n "$LAST_FILE" ]; then
                     echo "[DEBUG_SHUTDOWN] Print ended. Disabling heater relays." >> "$DEBUG_LOG"
                     LAST_FILE=""  
-                    LAST_TARGET_SENT="-1"
                     ACTIVE_IP=$(get_valid_ip)
                     if [ -n "$ACTIVE_IP" ] && [ "$ACTIVE_IP" != "0.0.0.0" ]; then
                         curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
