@@ -36,6 +36,8 @@ run_monitor_loop() {
         
         STATE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['state'])" 2>/dev/null)
         CURRENT_FILE=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['result']['status']['print_stats']['filename'])" 2>/dev/null)
+        DURATION=$(echo "$STATS_BLOB" | python3 -c "import sys, json; d=json.load(sys.stdin); print(int(d['result']['status']['print_stats']['print_duration']))" 2>/dev/null)
+        [ -z "$DURATION" ] && DURATION="0"
 
         case "$STATE" in
             *"printing"*)
@@ -45,6 +47,9 @@ run_monitor_loop() {
                     if [ -f "$FULL_PATH" ]; then
                         RAW_TARGET=$(head -n 500 "$FULL_PATH" | grep "M141" | sed -n 's/.*M141.*S\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r\n ')
                         [ -z "$RAW_TARGET" ] && RAW_TARGET="0"
+                        TIME_STR=$(tail -n 1000 "$FULL_PATH" | grep -i "estimated printing time (normal mode)" | cut -d'=' -f2 | tr -d '\r\n ')
+                        TOTAL_ESTIMATE=$(python3 -c "import re, sys;s = \"\"\"$TIME_STR\"\"\".strip();h = re.search(r'(\d+)h', s);m = re.search(r'(\d+)m', s);s_match = re.search(r'(\d+)s', s);total = (int(h.group(1))*3600 if h else 0) + (int(m.group(1))*60 if m else 0) + (int(s_match.group(1)) if s_match else 0);print(total);" 2>/dev/null)
+                        [ -z "$TOTAL_ESTIMATE" ] && TOTAL_ESTIMATE="1800"
 
                         ACTIVE_IP=$(get_valid_ip)
                         
@@ -52,8 +57,13 @@ run_monitor_loop() {
                             # Query the ESP32 directly to see what its current hardware target is set to
                             ESP32_STATUS=$(curl -s --connect-timeout 2 --max-time 3 "http://$ACTIVE_IP/")
                             LIVE_HARDWARE_TARGET=$(echo "$ESP32_STATUS" | grep "Target Temp:" | awk '{print $3}' | cut -d'.' -f1 | tr -d '\r\n ')
+                            TIME_REMAINING=$((TOTAL_ESTIMATE - DURATION))
 
-                            echo "[DEBUG_LOOP] Polled State: [$STATE] | Required: [$RAW_TARGET] | ESP32 Target: [$LIVE_HARDWARE_TARGET]" >> "$DEBUG_LOG"
+                            echo "[DEBUG_LOOP] Polled State: [$STATE] | Required: [$RAW_TARGET] | ESP32 Target: [$LIVE_HARDWARE_TARGET] | GCode Estimate: [$TOTAL_ESTIMATE] | Remaining: [$TIME_REMAINING] | Elapsed: [$DURATION]" >> "$DEBUG_LOG"
+
+                            if [ "$TIME_REMAINING" -lt 500 ]; then
+                                RAW_TARGET="0"
+                            fi
 
                             # If the ESP32 reset to 0, or doesn't match the G-code requirement, fire the payload
                             if [ "$RAW_TARGET" != "$LIVE_HARDWARE_TARGET" ]; then
@@ -61,9 +71,9 @@ run_monitor_loop() {
                                 echo "[DEBUG_PATH] Mismatch detected! Correcting hardware target to [$RAW_TARGET]" >> "$DEBUG_LOG"
 
                                 if [ "$RAW_TARGET" -lt 40 ]; then
-                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0" > /dev/null 2>&1
+                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=0&timer=0" > /dev/null 2>&1
                                 else
-                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET" > /dev/null 2>&1
+                                    curl -s --connect-timeout 2 --max-time 4 "http://$ACTIVE_IP/?target=$RAW_TARGET&timer=$TIME_REMAINING" > /dev/null 2>&1
                                     echo "[DEBUG_CURL_RESULT] Correction status: [$?]" >> "$DEBUG_LOG"
                                 fi
                             fi
