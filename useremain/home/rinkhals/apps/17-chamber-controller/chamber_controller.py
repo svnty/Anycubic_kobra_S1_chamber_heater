@@ -143,7 +143,7 @@ def run_monitor_loop():
                             log_debug(f"[DEBUG_ERR] Failed to communicate with ESP32 at {active_ip}: {esp_err}")
                     else:
                         log_debug("[DEBUG_ERR] Dynamic IP lookup returned empty.")
-        elif state in ["standby", "cancelled", "complete"]:
+        elif state in ["standby", "cancelled", "complete", "error"]:
             if last_file:
                 log_debug("[DEBUG_SHUTDOWN] Print ended. Disabling heater relays.")
                 last_file = ""
